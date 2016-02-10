@@ -16,7 +16,7 @@ The data contains (from the Yelp website):
 
 ### Initialisation
 To start, I'll import my libraries, include files, and set globals variables. After that, I'll load in the data (from cache if available).
-```{r initialise, results='hide', message=FALSE, warning=FALSE}
+```{r initialise, cache=TRUE, results='hide', message=FALSE, warning=FALSE, echo=FALSE}
 
 library(jsonlite)
 library(ggmap)
@@ -25,13 +25,14 @@ library(GGally)
 library(RColorBrewer)
 library(tidyr)
 library(dplyr)
+library(corrplot)
 # Include my standard function library
-source(file="~/R_code/common/rrfuncs.R")
+source(file="~/Dropbox/Learning_DS/R_code/common/rrfuncs.R")
 # Optionally clear my environment - makes things clearer
 # rm(list=ls())
-data_dir = c('~/datasets/yelp/')
+data_dir = c('~/Dropbox/Learning_DS/R_code/UdacityDA/yelp/dataset/')
 ```
-```{r load_data, cache=TRUE}
+```{r load_data, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 if (file.exists(paste0(data_dir,'yelp_data.Rd')))
 {
   load(paste0(data_dir,'yelp_data.Rd'))
@@ -45,68 +46,107 @@ if (file.exists(paste0(data_dir,'yelp_data.Rd')))
   y.review <- stream_in(file(paste0(data_dir,
                                     "yelp_academic_dataset_review.json")))
   y.tip <- stream_in(file(paste0(data_dir,"yelp_academic_dataset_tip.json")))
-  y.user <- stream_in(file(paste0(data_dir,"yelp_academic_dataset_user.json")))
+  y.user <- stream_in(file(paste0(data_dir,"yelp_academic_dataset_user.json.2")))
   # Cache the R data
   save(list=c('y.business','y.user','y.review','y.tip','y.checkin'), 
-       file=paste0(data_dir,'yelp_data.Rd'))
+       file=paste0(data_dir,'yelp_data.Rd'), compress='bzip2')
 }
 ```
 
 Now that the data is loaded, I'll quickly verify the Yelp statements about the dataset size, and take a quick look at the structure of the **y.business** data frame.
-```{r datacheck}
+```{r datacheck, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# Simple table of dataframe rows
 data.frame(rbind(
     c(Stat='Reviews',Rows=nrow(y.review)), 
     c('Tips', nrow(y.tip)),
     c('Users', nrow(y.user)),
-    c('Businesses', nrow(y.business)))
+    c('Businesses', nrow(y.business)),
+    c('Checkins', nrow(y.checkin)))
+    
   )
-# Use max.level, as this is a coplex nested frame
-str(y.business, max.level=1)
 ```
 
 ## Geography
 
 I know that the businesses are located in 10 distinct areas. I have their names, and the **latitude**/**longitude** are in the **y.business** object.
 I'll use k-means clustering to label the groups, which will allow for some comparative geo-analysis. I have the list of actual locations which the data should be from, so i will seed the kmeans with the lat/long of those ten locations.
-```{r geocode,cache=TRUE, message=FALSE, warning=FALSE}
+```{r geocode,cache=TRUE, message=FALSE, warning=FALSE, echo=FALSE}
+# Pre-defined city list
 cities<-c('Edinburgh, UK', 'Karlsruhe, Germany', 'Montreal, Canada', 
           'Waterloo, Canada', 'Pittsburgh, PA', 'Charlotte, NC', 
           'Urbana-Champaign, IL', 'Phoenix, AZ', 'Las Vegas, NV', 'Madison, WI')
+# This returns the lat/long of each city, using gmaps lookup
 region.centres<-geocode(cities, source='google')
 set.seed(43046721)
+# Use kmeans to cluster each business record, using the lookups as a starting point
 myclus<-kmeans(y.business[,c('longitude','latitude')],region.centres)
 y.business$location<-cities[myclus$cluster]
-table(y.business$location, y.business$state)
+```
+\newpage
+```{r geo_plot2, cache=TRUE,  message=FALSE, warning=FALSE, echo=FALSE, fig.height=7}
+location.summary <- y.business[,c('location','state')] %>% group_by(location, state) %>% summarise(sm=n()) %>% ungroup()
+location.summary$location<-as.factor(location.summary$location)
+location.summary$state<-as.factor(location.summary$state)
+ggplot(data=location.summary, aes(x=location, y=reorder(state,as.integer(location)))) + 
+  geom_point(aes(size=sm))+
+  scale_size('Businesses', trans='log') +
+  xlab('Location') +
+  ylab('State') +
+  theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5))
+```
+\newpage
+```{r geo_plot1, cache=TRUE,  message=FALSE, warning=FALSE, echo=FALSE}
+# Dump a table of the location/state maps - generally should only have 1 state per cluster
+
+# Histogram to show volumes of businesses by cluster
 ggplot(data=y.business, aes(x=location)) + 
-  geom_histogram() +
-  theme(axis.text.x=element_text(angle=50, size=10, vjust=0.5))
+  geom_bar() +
+  stat_count() +
+  theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5))
 ```
 
-These results show a good grouping, where each state is entirely represented by one cluster, with the exception of two. 
-Cluster 8 and 9 both contain CA - reasonable as both *AZ* and *NV* border it. 
-Cluster 9 seems to contain a rogue *SC* entry:
-```{r}
-subset(y.business, state=='NC' & location=='Las Vegas, NV')$full_address
+These results show a good grouping, where each state is entirely represented by one cluster, with the exception of a few erronously identified businesses. For instance, 'Cavalia' in Montreal (based on it's latitude/longitude), has been given the address details of Cavalia in Burbank California. Note that Edinburgh covers many Scottish counties - these are much smaller than US states.
+```{r message=FALSE, cache=TRUE, error=FALSE, echo=FALSE}
+subset(y.business, state=='CA' & location=='Montreal, Canada')$full_address
 ```
 
-It's a typo! Yelp must take the **state** value from the entered address. 
 I'll do a pair of map plots - one for the US, and one for Europe - to show the distribution of the business, coloured by the cluster.
-```{r create_maps,message=FALSE, error=FALSE}
-europe.centre <- colMeans(apply(myclus$centers[cities %in% 
-                            c('Edinburgh, UK','Karlsruhe, Germany'),],2,range))
+
+```{r create_maps, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# I will take a sample of the businesses - 
+#  too many will create large/slow map plots
+y.business.sample <- sample_n(y.business,5000)
+
+# Find the centre of the europe groups, and pull a map from google
+europe.centre <- 
+    colMeans( apply(
+        myclus$centers[cities %in% c('Edinburgh, UK','Karlsruhe, Germany'),],
+        2,range)
+    )
 map.europe <- get_map(location = europe.centre, zoom = 6)
+# Generate and store the map
 map1<-ggmap(map.europe) + 
-    geom_point(aes(x=longitude, y=latitude, color=location), 
-               data=subset(y.business, 
+    geom_point(aes(x=longitude, y=latitude, color=location), size=4, 
+               data=subset(y.business.sample, 
                         location %in% c('Edinburgh, UK','Karlsruhe, Germany')))
 
-usa.centre <- colMeans(apply(myclus$centers[!cities %in% 
-                            c('Edinburgh, UK','Karlsruhe, Germany'),],2,range))
+# Find the centre of the USA groups, and pull a map from google
+usa.centre <- 
+    colMeans(apply(
+        myclus$centers[!cities %in% c('Edinburgh, UK','Karlsruhe, Germany'),],
+        2,range)
+    )
 map.usa <- get_map(location = usa.centre, zoom = 4)
+# Generate and store the map
 map2<-ggmap(map.usa) + 
-    geom_point(aes(x=longitude, y=latitude, color=location), 
-               data=subset(y.business, 
-                        !location %in% c('Edinburgh, UK','Karlsruhe, Germany')))
+    geom_point(
+        aes(x=longitude, y=latitude, color=location), 
+        size=4, 
+        data=subset(
+            y.business.sample,
+            !location %in% c('Edinburgh, UK','Karlsruhe, Germany')
+        )
+    )
 
 map1
 map2
@@ -115,24 +155,95 @@ map2
 The maps show that the clustering worked nicely, and also shows the geographic spread of the businesses in the dataset. Despite the scale of the USA map, you can see something of the dispersal of businesses within each cluster - the Phoenix AZ cluster is the largest of the groups on the map, while the Urbana-Champaign IL group is smallest.
 
 I'll add a distance to the cluster center too - I can then do some analysis of the area covered by each cluster
-This is only for a comparative measure, and the distances /should/ be relatively short, so i won't go so far as a great circle calculation
-```{r geo_distance}
-t.distance<-y.business[,c('longitude','latitude')]-myclus$centers[
-                                                                myclus$cluster,]
-y.business$distance.from.centre<-sqrt(rowSums(t.distance**2))
-tbl_df(y.business[,c('location','distance.from.centre')]) %>% 
-  group_by(location) %>% 
-  summarise(mn=mean(distance.from.centre), sd=sd(distance.from.centre))
-```
-This shows that Urbana-Champaign has the tightest group of businesses (low mean and standard deviation), while Phoenix has the most dispersed, as seen on the map plots.
+This process uses the Haversine formula for distance on a sphere, given two pairs of coordinates in radians. The resulting figures are in kilometres.
+```{r geo_distance, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# Define a function for the Haversine spherical distance function
+haversine <- function (incoords ,rad = F) {
+    #
+    # Calculate the great circle distance between two points 
+    # on the earth (specified in decimal degrees, if rad=F)
+    #
+    # convert decimal degrees to radians 
+    if (!rad) {
+        lon1<-incoords[1]*pi/180
+        lat1<-incoords[2]*pi/180
+        lon2<-incoords[3]*pi/180
+        lat2<-incoords[4]*pi/180
+    }
+    # haversine formula 
+    dlon = lon2 - lon1 
+    dlat = lat2 - lat1 
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a)) 
+    km = 6367 * c
+    return (km)
+}
 
-****************************************  TODO   MORE GEO STUFF!!!!!   Maybe a multivariate plot of some kind? Deeper analysis of a single city?
+# Calculate distances from cluster centres
+y.business$distance.from.centre <- 
+    apply(
+        cbind(y.business[,c('longitude','latitude')], 
+              myclus$centers[myclus$cluster,]), 
+        MARGIN=1, 
+        FUN=haversine
+        )
+
+tbl_df(y.business[,c('location','distance.from.centre')]) %>% 
+    group_by(location) %>% 
+    summarise(mn=mean(distance.from.centre), sd=sd(distance.from.centre))
+```
+This shows that Urbana-Champaign has the tightest group of businesses (low mean and standard deviation), while Phoenix has the most dispersed, as seen on the map plots. I'll take a closer look at Phoenix - this will be a good location to investigate, as it is both the most dispersed, and has the most business points.
+
+```{r geo_distance_2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE, warning=FALSE}
+# some businesses have multiple neighbourhoods - only take the first
+y.business$neighborhoods2<-
+  as.factor(
+    unlist(
+      lapply(
+        y.business$neighborhoods, FUN = function (x){x[1]})
+      )
+    )
+# Fix the NAs - have to add a factor level first
+levels(y.business$neighborhoods2)<-c(levels(y.business$neighborhoods2),'None')
+y.business[is.na(y.business$neighborhoods2),]$neighborhoods2<-'None'
+# a fucntion to display business location data
+# Try to colour by neighbourhoods2
+rr.city.map <- function(place, zoom=10) {
+    area.map<-get_map(location = myclus$centers[cities==place,], zoom=zoom)
+    local.data<-y.business[y.business$location==place,c('longitude','latitude','neighborhoods2')]
+    if (all(is.na(local.data$neighborhoods2))) { local.data$neighborhoods2<-'None'}
+    the.map<-ggmap(area.map) +
+        geom_point(
+            aes(x=longitude, y=latitude, color=neighborhoods2), 
+            alpha=0.2, size=1, 
+            data=local.data
+        ) + geom_jitter()
+    return (the.map)
+}
+rr.city.map('Phoenix, AZ', 9)
+```
+
+From the above plot, you can clearly see the distribution of the businesses along the grid pattern of the roads with clustering around Phoenix itself, and the satellite towns including Scottsdale, Glendale and Tempe. I tried to use the *neighborhoods* column to highlight each area, however in Phoenix, no actual neighbourhoods were indicated. Checking the businesses that have neighbourhood data:
+
+```{r neighbourhoods, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE }
+table(y.business$location, ifelse(y.business$neighborhoods=='character(0)','No Neighbourhood','Has Neighborhood'))
+```
+
+The neighbourhood data is very spotty, with four locations having no neighbourhood data at all. This can't really be used for analysis - though viewing a specific location could be interesting.
+
+```{r neighbourhoods_map, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE }
+rr.city.map('Las Vegas, NV', 11)
+```
+
+The neighbourhoods are clearly grouped together on this plot. Where we do have neighhood data, clustering could be used to label the unidentified neighbourhoods - although this could fail - as seen by the area east of Spring Valley, where there are a large group of unlabeled businesses. This looks like it should be a neighbourhood, but is inexplicably blank. 
+
+This kind of study shows the unreliability of the details for businesses in this dataset. While there is a vast amount of data available, the high level of inconsistency means that it would be difficult to rely on any of it. With this in mind, I'll move on to the data generated internally by Yelp.
 
 ## Business Categories
 
-I'd also like to get a primary category for each business - this will also simplify analysis. The primary category list is taken from https://www.yelp.com/developers/documentation/v2/all_category_list.
+I'd like to get a primary category for each business - this will also simplify analysis. The primary category list is taken from https://www.yelp.com/developers/documentation/v2/all_category_list.
 
-```{r primary_category, cache=TRUE}
+```{r primary_category, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 yelp.primary.categories<-
   c('Active Life','Arts & Entertainment','Automotive','Beauty & Spas',
     'Education','Event Planning & Services','Financial Services','Food',
@@ -146,9 +257,9 @@ y.business$primary.categories<-
          function (x) sort(intersect(x, yelp.primary.categories)))
 length(unique(y.business$primary.categories))
 ```
-There are 325 combinations of primary categories! This makes any specific comparison of primary categories tricky, as businesses could belong to several primary categories. Taking an slightly different tack led me to think more deeply about the categories and review counts. Do businesses with more categories have more reviews and/or higher ratings?
+There are 346 combinations of primary categories! This makes any specific comparison of primary categories tricky, as businesses could belong to several primary categories. Taking an slightly different tack led me to think more deeply about the categories and review counts. Do businesses with more categories have more reviews and/or higher ratings?
 
-```{r category_plot}
+```{r category_plot, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 cat.dist<-
   data.frame(categories=
                as.factor(
@@ -165,32 +276,62 @@ cat.dist2<- cat.dist %>%
                       n=n())
 rr.multiplot(
   ggplot(data=cat.dist2, aes(x=categories)) + 
-    geom_histogram(aes(y=median_reviews), stat='identity'),
+    geom_bar(aes(y=median_reviews), stat='identity'),
   ggplot(data=cat.dist2, aes(x=categories)) + 
-    geom_histogram(aes(y=median_stars), stat='identity'),
+    geom_bar(aes(y=median_stars), stat='identity'),
   cols=2)
 ```
 
 There isn't a clear link between the ratings and number of categories, but there appears to be a clear link between categories and number of reviews
 
-```{r plot_ratings_reviews}
+```{r plot_ratings_reviews, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 ggplot(data=cat.dist, aes(x=categories, y=reviews)) +
-  coord_trans(ytrans='log10') +
-  geom_boxplot() +
-  geom_jitter(alpha=0.2, aes(color=categories), 
-              position=position_jitter(width=.2))+
-  scale_colour_brewer('categories', palette='Paired') +
-  scale_y_log10()
+    coord_trans(y='log10') +
+    geom_boxplot() +
+    scale_y_log10()
 ```
 
-Using a log plot of reviews shows there are actually few businesses with very high numbers of reviews. The point density shows the bulk of businesses have between 2 and 5 categories, and less than 100 reviews
+Using a log plot of reviews shows there are actually few businesses with very high numbers of reviews. The point density shows the bulk of businesses have between 2 and 5 categories, and less than 100 reviews. Let's have a look at some of the high review businesses that form those outliers. 
 
+```{r high_reviews, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+slim.business<-y.business[,c('name','location','review_count','stars')]
+slim.business %>% arrange(desc(review_count)) %>% head(10)
+```
+
+Every one of the top ten business by *review_count* is in Las Vegas! (In fact, 89 of the top 100 reviewed businesses are in Las Vegas). I'll examine the total review counts and the means, to see if this is a trend.
+
+```{r high_review_plots, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+ggplot(data=slim.business) + 
+    geom_bar(aes(x=location, y=review_count), stat='sum') +
+    theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5)) +
+    ggtitle('Total business review counts by location')
+ggplot(data=slim.business, aes(x=location, y=review_count)) +
+    coord_trans(y='log10') +
+    geom_boxplot() +
+    scale_y_log10()+
+    theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5)) +
+    ggtitle('Boxplot of reviews by location')
+```
+While the total reviews in Las Vegas is significantly greater than the other locations, the boxplot shows only a small increase in the median *review_count*. This implies that a small group of very highly reviewed businesses are present in Las Vegas, skewing the figures. 
+
+I would theorise that this skewing is due to Las Vegas being the most touristic of the ten locations. Many more people will visit Las Vegas than the other locations, thus increasing the number of reviews.
+
+```{r location_rating_plot, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+mean.reviews<-slim.business %>% group_by(location) %>% summarise(mn=mean(stars))
+ggplot(data=mean.reviews) + 
+    geom_bar(aes(x=location, y=mn), stat='identity') +
+    scale_y_continuous(limits=c(0,5), name='Mean Rating') +
+    theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5)) +
+    ggtitle('Total business review counts by location')
+```
+    
+Tourism doesn't seem to affect the mean rating, however - every location has roughly the same mean.
 
 ## Checkins
 
 I had hoped to perform more category-based analysis, but with multiple primary categories, I would have to sift the combinations and derive so kind of hierarchy to determine a single primary for each business. Instead, I chose to look into a different view of the data - checkins. This shows when businesses are visited, by week-hour. The **y.checkin** data frame contains my core data - I'll add some of the columns from **y.business** to provide a more useful single frame. I will use heatmaps to visualise this data.
 
-```{r checkin_build,cache=TRUE}
+```{r checkin_build,cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 y.checkin<-data.frame(flatten(y.checkin))
 y.checkin<- 
   y.checkin %>%
@@ -212,68 +353,124 @@ y.checkin.long <-
 # This code from http://stackoverflow.com/questions/25347739/r-convert- \\ 
 #                     factor-column-to-multiple-boolean-columns
 lvl <- unique(unlist(y.checkin.long$primary.categories))      
-res <- data.frame(do.call(rbind,lapply(y.checkin.long$primary.categories,
-                                       function(x) table(factor(x, levels=lvl)))
-                          ), 
-                  stringsAsFactors=FALSE)
+res <-  data.frame(
+            do.call(
+                rbind,lapply(
+                    y.checkin.long$primary.categories,
+                    function(x) table(factor(x, levels=lvl)))
+            ), 
+            stringsAsFactors=FALSE)
+
 y.checkin.long<-cbind(y.checkin.long, res)
-
-
-#  Lets look at restaurants, nightlife, and religious organisations
-rr.heatmap <- function (l.criteria, loc_wrap = FALSE)
-{
-  p<-ggplot(subset(y.checkin.long, eval(parse(text=l.criteria))), aes(dy, hr)) + 
-    geom_tile(aes(fill = log(value)), colour = "white") + 
-    scale_fill_gradient(low = "white", high = "red")
-  p + if (loc_wrap==TRUE) facet_wrap( ~ location ) else NULL
+```
+```{r checkin_plot,  cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# Define a heatmap function to use. 
+rr.heatmap <- function (l.criteria, loc_wrap = FALSE) {
+    # l.criteria is a string containing filters, e.g. 'Restaurants>0'
+    # if loc_wrap is TRUE, then separate heatmaps are created for each location
+    # note that the heat is independent for each location, if wrapped.
+    if (loc_wrap) {
+        sub.data <- subset(y.checkin.long, eval(parse(text=l.criteria))) %>% 
+            filter_(l.criteria) %>%
+            group_by(location, hr,dy) %>%
+            summarise(sm = sum(value)) %>%
+            mutate(sm=(sm-mean(sm))/sd(sm)) %>%
+            mutate(sm=ifelse(is.na(sm),0,sm))
+    } else {
+        sub.data <- subset(y.checkin.long, eval(parse(text=l.criteria))) %>% 
+            filter_(l.criteria) %>%
+            group_by(hr,dy) %>%
+            summarise(sm = sum(value)) 
+    }
+    # Create the base plot object
+    p <- ggplot(sub.data, aes(dy, hr)) + 
+        geom_tile(aes(fill = sm)) + 
+        scale_fill_gradient(low = "white", high = "red")
+    # Facet wrap, if requested
+    p + if (loc_wrap==TRUE) facet_wrap( ~ location) else NULL
 }
-
-rr.heatmap('Restaurants>0&value<quantile(value,0.95)')+ggtitle('Restaurants')
+#  Lets look at restaurants, nightlife, and religious organisations
+rr.heatmap('Restaurants>0')+ggtitle('Restaurants')
 ``` 
 
-I would have expected to see a pattern in restaurant checkins - more frequent at lunchtimes and evenings - but there are no clear patterns to be seen in this plot. The *nightlife* category should clearly show a pattern...
-```{r checkin_heatmap2}
-rr.heatmap('Nightlife>0&value<quantile(value,0.95)')+ggtitle('Nightlife')
+Here we can see a clear pattern in restaurant checkins - more frequent at lunchtimes and evenings, and also on Friday and Saturdays. The *nightlife* category should clearly show a similar pattern...
+
+```{r checkin_heatmap2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+rr.heatmap('Nightlife>0')+ggtitle('Nightlife')
 ```
-This very puzzling. The checkins seem to be widely scattered. A final look at these, taking Religious Organisations and splitting by location...
-```{r checkin_heatmap3}
-rr.heatmap('Religious.Organizations>0&value<quantile(value,0.95)', TRUE)+
-  ggtitle('Religious Organisations')
+A similar pattern, but with more emphasis on the weekend evenings. 
+```{r checkin_heatmap3, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+rr.heatmap('Shopping>0', TRUE)+
+  ggtitle('Shopping')
 ```
-This plot does show a few patterns. Phoenix has a clear grouping of checkins on day 6, around 10am - morning on a Sunday seems a sensible time for visitng church. The Las Vegas distribution is clearly weighted towards the evening, and Saturday morning and lunchtime. My theory here would be that the checkins are mainly at wedding venues. Sadly the dataset doesn't contain business names, so this would be difficult to investigate further. It would appear that checkins are not always associated with actual presence at the business in question, which makes the data of limited real use.
+Shopping patterns show that Saturday is the most popular day across the ten locations. Sunday trading shows an interesting pattern, particularly in Karlsruhe where there is almost no activity - Germany has strict Sunday trading laws, and most shops will be closed.
+
 
 ## Users
 
 ******************  TODO Expand on the text 
 Initial look at the user data
-```{r user_plot1}
+```{r user_plot1, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 y.user$elite.years<-unlist(lapply(y.user$elite, length))
-
+y.user$elite<-NULL
 # Sample 50k rows to increase speed 
 ggplot(data=sample_n(y.user,50000), aes(x=review_count, y=fans)) + 
   geom_point( alpha=0.2, position='jitter')
 
 ```
 Improve - remove extreme outliers, log the scales, add the elite.years as a colour 
-```{r user_plot2}
+```{r user_plot2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 
 ggplot(data=
-       subset(y.user, 
-              review_count<quantile(review_count,0.99) 
-              & fans<quantile(fans,0.99)
-              ), 
+       sample_n(subset(y.user, 
+              review_count<quantile(review_count,0.999) 
+              & fans<quantile(fans,0.999)
+              ),10000), 
        aes(x=review_count, y=fans)
        ) + 
-  geom_point(alpha=0.2, 
-             position='jitter', 
-             aes(color=elite.years+0.1)
+  geom_point(position='jitter', 
+             aes(color=elite.years+1)
              )+
   scale_colour_gradientn(
              colours=c('blue','green'), 
              trans='log', 
              breaks=c(1,3,5,10,15))
 ```
-****** TODO Correlation between review count and fans
+This plot appears to show a mild correlation between reviews and fans, but the data is still far too compressed. I'll remove the low-fan users, and see what impact that has.
+```{r user_plot3, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+
+ggplot(data=
+       subset(y.user, 
+          review_count<quantile(review_count,0.999) 
+          & fans<quantile(fans,0.999)
+          & fans > 3
+          & review_count >3
+          ), 
+       aes(x=review_count, y=fans)
+       ) + 
+  geom_point(position='jitter', 
+             aes(color=elite.years+1)
+             )+
+  scale_colour_gradientn(
+             colours=c('blue','green'), 
+             trans='log', 
+             breaks=c(1,3,5,10,15))
+```
+Now we can see the correlation between *review_count* and *fans* more clearly - and additionally we can see a peculiar grouping of high *fan*, low *review_count* users. This is a strange grouping of outliers, particularly as they seem to be clustered around 70 fans. I could speculate many reasons for this, but without sufficient supporting data I can't make any confident statements. I do, however, consider them to be an anomaly, and will exclude them from further analysis (*fans*>60, *review_count*<30).
+
+Look at the correlations in the user stats:
+```{r user_corr, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+y.user.short <- 
+    flatten(y.user) %>% 
+    filter(!(fans>60&review_count<30)) %>% 
+    select(elite.years, friends, review_count, average_stars, 
+           fans, votes.funny, votes.useful, votes.cool)
+corrplot(cor(y.user.short), type='lower', order='hclust')
+```
+
+We can see that there is no correlation between *average_stars* and any of the other values, but there is a strong correlation between the *votes* columns, particularly *votes.funny* and *votes.useful*.
+
+
 ****** TODO Further user analysis - 2-3 more vis
 
 ## Final Plots and Summary
