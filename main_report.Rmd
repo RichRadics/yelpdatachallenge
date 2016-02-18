@@ -2,7 +2,7 @@
 title: "Yelp Data Wrangling Project"
 author: "Rich Dean"
 date: "22 October 2015"
-output: pdf_document
+output: html_document
 ---
 
 
@@ -84,9 +84,11 @@ y.business$location<-cities[myclus$cluster]
 ```
 \newpage
 ```{r geo_plot2, cache=TRUE,  message=FALSE, warning=FALSE, echo=FALSE, fig.height=7}
+# Summarise the business location data, and factorise the string columns
 location.summary <- y.business[,c('location','state')] %>% group_by(location, state) %>% summarise(sm=n()) %>% ungroup()
 location.summary$location<-as.factor(location.summary$location)
 location.summary$state<-as.factor(location.summary$state)
+# Generate plot of business frequencies by location and state. Use point size to represent frequency
 ggplot(data=location.summary, aes(x=location, y=reorder(state,as.integer(location)))) + 
   geom_point(aes(size=sm))+
   scale_size('Businesses', trans='log') +
@@ -94,21 +96,23 @@ ggplot(data=location.summary, aes(x=location, y=reorder(state,as.integer(locatio
   ylab('State') +
   theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5))
 ```
-\newpage
-```{r geo_plot1, cache=TRUE,  message=FALSE, warning=FALSE, echo=FALSE}
-# Dump a table of the location/state maps - generally should only have 1 state per cluster
 
+These results show a good grouping, where each state is entirely represented by one cluster, with the exception of a few erronously identified businesses. For instance, 'Cavalia' in Montreal (based on it's latitude/longitude), has been given the address details of Cavalia in Burbank California. Note also that Edinburgh covers many Scottish counties - these are much smaller than US states
+
+```{r message=FALSE, cache=TRUE, error=FALSE, echo=FALSE}
+subset(y.business, state=='CA' & location=='Montreal, Canada')$full_address
+```
+
+```{r geo_plot1, cache=TRUE,  message=FALSE, warning=FALSE, echo=FALSE}
 # Histogram to show volumes of businesses by cluster
 ggplot(data=y.business, aes(x=location)) + 
   geom_bar() +
   stat_count() +
   theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5))
 ```
+.
+The second vis shows that the data is heavily geographically skewed towards two particular locations - Phoenix and Las Vegas. No information was provided regarding the sampling of the data, so no real conclusions can be drawn from this distribution. 
 
-These results show a good grouping, where each state is entirely represented by one cluster, with the exception of a few erronously identified businesses. For instance, 'Cavalia' in Montreal (based on it's latitude/longitude), has been given the address details of Cavalia in Burbank California. Note that Edinburgh covers many Scottish counties - these are much smaller than US states.
-```{r message=FALSE, cache=TRUE, error=FALSE, echo=FALSE}
-subset(y.business, state=='CA' & location=='Montreal, Canada')$full_address
-```
 
 I'll do a pair of map plots - one for the US, and one for Europe - to show the distribution of the business, coloured by the cluster.
 
@@ -147,8 +151,12 @@ map2<-ggmap(map.usa) +
             !location %in% c('Edinburgh, UK','Karlsruhe, Germany')
         )
     )
-
+```
+```{r plot_map1, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 map1
+```
+
+```{r plot_map2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 map2
 ```
 
@@ -205,12 +213,13 @@ y.business$neighborhoods2<-
     )
 # Fix the NAs - have to add a factor level first
 levels(y.business$neighborhoods2)<-c(levels(y.business$neighborhoods2),'None')
-y.business[is.na(y.business$neighborhoods2),]$neighborhoods2<-'None'
+#y.business[is.na(y.business$neighborhoods2),]$neighborhoods2<-'None'
 # a fucntion to display business location data
 # Try to colour by neighbourhoods2
 rr.city.map <- function(place, zoom=10) {
     area.map<-get_map(location = myclus$centers[cities==place,], zoom=zoom)
     local.data<-y.business[y.business$location==place,c('longitude','latitude','neighborhoods2')]
+    # fix NAs to an actual value, if all are NA
     if (all(is.na(local.data$neighborhoods2))) { local.data$neighborhoods2<-'None'}
     the.map<-ggmap(area.map) +
         geom_point(
@@ -231,19 +240,20 @@ table(y.business$location, ifelse(y.business$neighborhoods=='character(0)','No N
 
 The neighbourhood data is very spotty, with four locations having no neighbourhood data at all. This can't really be used for analysis - though viewing a specific location could be interesting.
 
-```{r neighbourhoods_map, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE }
+```{r neighbourhoods_map, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE, warning=FALSE }
 rr.city.map('Las Vegas, NV', 11)
 ```
 
-The neighbourhoods are clearly grouped together on this plot. Where we do have neighhood data, clustering could be used to label the unidentified neighbourhoods - although this could fail - as seen by the area east of Spring Valley, where there are a large group of unlabeled businesses. This looks like it should be a neighbourhood, but is inexplicably blank. 
+The neighbourhoods are clearly grouped together on this plot. Where we do have neighhood data, clustering could be used to label the unidentified neighbourhoods - although this could fail - as seen by the area east of Spring Valley, where there are a large group of businesses with no nebourhood (coloured grey). This looks like it should be a neighbourhood, but is inexplicably blank. 
 
 This kind of study shows the unreliability of the details for businesses in this dataset. While there is a vast amount of data available, the high level of inconsistency means that it would be difficult to rely on any of it. With this in mind, I'll move on to the data generated internally by Yelp.
 
 ## Business Categories
 
-I'd like to get a primary category for each business - this will also simplify analysis. The primary category list is taken from https://www.yelp.com/developers/documentation/v2/all_category_list.
+I'd like to get a primary category for each business - this will also simplify analysis. The primary category list is taken from https://www.yelp.com/developers/documentation/v2/all_category_list. As some businesses appear to have more than one primary category, I will see how many combinations there are...
 
 ```{r primary_category, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# Define primary categories
 yelp.primary.categories<-
   c('Active Life','Arts & Entertainment','Automotive','Beauty & Spas',
     'Education','Event Planning & Services','Financial Services','Food',
@@ -251,10 +261,11 @@ yelp.primary.categories<-
     'Local Services','Mass Media','Nightlife','Pets','Professional Services',
     'Public Services & Government','Real Estate','Religious Organizations',
     'Restaurants','Shopping')
-
+# Pull the primary categories from each business, and store them in a new column
 y.business$primary.categories<-
   lapply(y.business$categories, 
          function (x) sort(intersect(x, yelp.primary.categories)))
+# How many distinct category combinations do we have?
 length(unique(y.business$primary.categories))
 ```
 There are 346 combinations of primary categories! This makes any specific comparison of primary categories tricky, as businesses could belong to several primary categories. Taking an slightly different tack led me to think more deeply about the categories and review counts. Do businesses with more categories have more reviews and/or higher ratings?
@@ -294,6 +305,7 @@ ggplot(data=cat.dist, aes(x=categories, y=reviews)) +
 Using a log plot of reviews shows there are actually few businesses with very high numbers of reviews. The point density shows the bulk of businesses have between 2 and 5 categories, and less than 100 reviews. Let's have a look at some of the high review businesses that form those outliers. 
 
 ```{r high_reviews, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+# subset the business review/star data to speed the calcs
 slim.business<-y.business[,c('name','location','review_count','stars')]
 slim.business %>% arrange(desc(review_count)) %>% head(10)
 ```
@@ -312,6 +324,7 @@ ggplot(data=slim.business, aes(x=location, y=review_count)) +
     theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5)) +
     ggtitle('Boxplot of reviews by location')
 ```
+
 While the total reviews in Las Vegas is significantly greater than the other locations, the boxplot shows only a small increase in the median *review_count*. This implies that a small group of very highly reviewed businesses are present in Las Vegas, skewing the figures. 
 
 I would theorise that this skewing is due to Las Vegas being the most touristic of the ten locations. Many more people will visit Las Vegas than the other locations, thus increasing the number of reviews.
@@ -398,18 +411,21 @@ Here we can see a clear pattern in restaurant checkins - more frequent at luncht
 ```{r checkin_heatmap2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 rr.heatmap('Nightlife>0')+ggtitle('Nightlife')
 ```
+
 A similar pattern, but with more emphasis on the weekend evenings. 
+
 ```{r checkin_heatmap3, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 rr.heatmap('Shopping>0', TRUE)+
   ggtitle('Shopping')
 ```
-Shopping patterns show that Saturday is the most popular day across the ten locations. Sunday trading shows an interesting pattern, particularly in Karlsruhe where there is almost no activity - Germany has strict Sunday trading laws, and most shops will be closed.
+
+Shopping patterns show that Saturday is the most popular day across the ten locations. Sunday trading shows an interesting pattern, particularly in Karlsruhe where there is almost no activity. Germany has strict Sunday trading laws, and most shops will be closed.
 
 
 ## Users
 
-******************  TODO Expand on the text 
-Initial look at the user data
+I'll conclude the initial EDA of the Yelp dataset by looking at the *y.user* data.
+
 ```{r user_plot1, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 y.user$elite.years<-unlist(lapply(y.user$elite, length))
 y.user$elite<-NULL
@@ -418,7 +434,9 @@ ggplot(data=sample_n(y.user,50000), aes(x=review_count, y=fans)) +
   geom_point( alpha=0.2, position='jitter')
 
 ```
-Improve - remove extreme outliers, log the scales, add the elite.years as a colour 
+
+I'll improve the plot by removing extreme outliers, log the scales, and adding the *elite.years* (number of years a user has been an 'elite' member) as a colour.
+
 ```{r user_plot2, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 
 ggplot(data=
@@ -436,7 +454,9 @@ ggplot(data=
              trans='log', 
              breaks=c(1,3,5,10,15))
 ```
+
 This plot appears to show a mild correlation between reviews and fans, but the data is still far too compressed. I'll remove the low-fan users, and see what impact that has.
+
 ```{r user_plot3, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 
 ggplot(data=
@@ -456,9 +476,11 @@ ggplot(data=
              trans='log', 
              breaks=c(1,3,5,10,15))
 ```
+
 Now we can see the correlation between *review_count* and *fans* more clearly - and additionally we can see a peculiar grouping of high *fan*, low *review_count* users. This is a strange grouping of outliers, particularly as they seem to be clustered around 70 fans. I could speculate many reasons for this, but without sufficient supporting data I can't make any confident statements. I do, however, consider them to be an anomaly, and will exclude them from further analysis (*fans*>60, *review_count*<30).
 
 Look at the correlations in the user stats:
+
 ```{r user_corr, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
 y.user.short <- 
     flatten(y.user) %>% 
@@ -470,20 +492,115 @@ corrplot(cor(y.user.short), type='lower', order='hclust')
 
 We can see that there is no correlation between *average_stars* and any of the other values, but there is a strong correlation between the *votes* columns, particularly *votes.funny* and *votes.useful*.
 
+```{r user_funnyuseful1, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+sdata<- subset(y.user.short, 
+                votes.funny>20 &
+                votes.cool>20)
+ggplot(data=sdata,
+        aes(x=votes.funny, y=votes.cool)
+)+ 
+geom_point(position='jitter', 
+           alpha=0.1,       aes(color=elite.years+1)
+)+ 
+  scale_colour_gradientn(
+    colours=c('blue','green'), 
+    trans='log', 
+    
+    breaks=c(1,3,5,10,15))+
+  scale_x_continuous(trans='log')+
+  scale_y_continuous(trans='log')
+  
+```
 
-****** TODO Further user analysis - 2-3 more vis
+Visually, a very strong correlation here, suggesting that the majority of *funny* votes are accompanied by *useful* votes. Looking at the correlation coefficient between these two, and the results of a linear regression should confirm this to a high degree of confidence.
+
+```{r user_funnyuseful_corr, cache=TRUE,message=FALSE, error=FALSE}
+cor(sdata$votes.funny, sdata$votes.useful)
+summary(lm(sdata$votes.funny ~ sdata$votes.useful))
+```
+
+A correlation coefficient of 0.95, and an R-squared value on 0.91 from the linear regression indicates a very strong relationship between the *useful* and *funny* votes. 
 
 ## Final Plots and Summary
 
+I have chosen three plots to illustrate features within the Yelp dataset, each of which tells a story. 
 
-****** TODO Select my 3 plots, make them perfect. Suggest:
-****** TODO USA map, heat map of religion in Phoenix, one other TBD
+```{r finalplot_vegas, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE, warning=FALSE}
+place<-'Las Vegas, NV'
+area.map<-get_map(location = myclus$centers[cities==place,], zoom=11, source='stamen')
+local.data<-y.business[y.business$location==place,c('longitude','latitude','review_count', 'neighborhoods2')]
+the.map<-
+    ggmap(area.map) +
+    geom_point(
+        aes(x=longitude, y=latitude, size=review_count, color=neighborhoods2), 
+        alpha=0.5,
+        data=local.data
+    ) + 
+  scale_size(breaks=c(1,50,500,1000,5000), range=c(0,10), name='Review Count') +
+  scale_colour_hue(name='Neighbourhood') +
+  geom_jitter() +
+  xlab('Degrees Longitude (N)') + ylab('Degress Latitude (E)') +
+  ggtitle('Distribution and Freqency of Yelp reviews in Las Vegas')
+the.map
+```
+
+This first visualisation shows the distribution of businesses in Las Vegas, colour-coded by neighbourhood, and sized by number of Yelp reviews. It shows clearly that the latitude/longitude data is correct, as the data points are neatly follow the road grid pattern on the background map. Neighbourhoods are also nicely grouped, with a peculiar exception to the west of The Strip - possibly identifying a problem in the data collection process. Finally, the point sizes show that the vast majority of reviews are posted against businesses along The Strip and Downtown - the most touristic areas of the city.
+
+```{r finalplot_shopping, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE, warning=FALSE}
+sub.data <- 
+    subset(y.checkin.long, Shopping>0) %>% 
+    filter(location!="Madison, WI") %>%
+    group_by(location, hr,dy) %>%
+    summarise(sm = sum(value)) %>%
+    mutate(sm=(sm-mean(sm))/sd(sm)) %>%
+    mutate(sm=ifelse(is.na(sm),0,sm))
+p <- ggplot(sub.data, aes(dy, hr)) + 
+    geom_raster(aes(fill = sm)) + 
+    xlab('Day') + ylab('Hour') +
+    scale_fill_gradient(low = "white", high = "blue", name="Check-in Score")     +
+    facet_wrap( ~ location) +
+    scale_x_discrete(name="Day",
+               labels=c("0" = "Monday", "1" = "Tuesday", "2" = "Wednesday", 
+                        "3" = "Thursday", "4" = "Friday", "5" = "Saturday",
+                        "6" = "Sunday")) +
+    theme(panel.background=element_rect(fill="white", colour="white")) +
+    theme(axis.text.x=element_text(angle=90, size=10, vjust=0.5)) +
+  ggtitle('Frequency of Shopping check-ins by date, time and location')
+                            
+p
+```
+
+Here, we can see the frequency distribution of shopping related 'check-in's split by time, day, and location, displayed as a facetted heat map. The *Check-in Score* is a representation of the actual checkin numbers, normalised across each location, so that a common scale can be used for each of the heat maps.
+
+The visualisation shows good patterns for checkin times, particularly for Las Vegas and Phoenix, where we have a large number of data points to work with. The strong colouring on Saturdays indicates the most popular check-in day, and more constrained banding on Sundays shows the effect of that particular day - limited trading hours compressing the check-in times. The data points for Karlsruhe are very limited, but still show the effect of Germany's very strict Sunday trading regulations, with virtually no checkins at all. Several peculiarities can be seen - the high number of check-ins around 5am on Friday in both Phoenix and Las Vegas would be worth further investigation.
+
+Note, I have excluded one location to improve the visual layout of the vis - 3x3 is significantly nicer to look at than the 4+4+2 layout shown earlier in this document.
+
+```{r final_funnyuseful, cache=TRUE,message=FALSE, error=FALSE, echo=FALSE}
+sdata<- subset(y.user.short, 
+                votes.funny>20 &
+                votes.cool>20)
+ggplot(data=sdata, aes(x=votes.funny, y=votes.cool))+ 
+  geom_point(position='jitter', alpha=0.1, aes(color=elite.years+1))+ 
+  scale_colour_gradientn(
+    colours=c('blue','green'), 
+    trans='log', 
+    breaks=c(1,3,5,10,15),
+    name='Elite years')+
+  scale_x_continuous(trans='log', name='Funny votes', breaks=c(100,500,1000,10000,50000))+
+  scale_y_continuous(trans='log', name='Useful votes', breaks=c(100,500,1000,10000,50000))+
+  geom_smooth(method='lm') + 
+  ggtitle('Comparison of funny and useful votes')
+```
+
+The correlation shown in this plot of user *useful* and *funny* votes is very strong, and almost implies that having two separate voting types available is pointness as if a *useful* vote is awarded, its is very likely that a *funny* vote will also be applied.
 
 ## Reflections
 
-******* TODO 200 words
-Large multi-layered dataset. 
-Primarily categorical/ text based. Well suited for a NLP/prediction project.
+My key reflection on the analysis above is that the Yelp dataset is *vast*. It covers such a large range of disparate subjects around the central topic of business reviews, that focussing on any particular core subject is not easy. Indeed, I spent many hours examining the data, yet still didn't touch two of the tables (tips and reviews). My focus jumped around geography, user statistics, check-in times, and category/ratings - without going too deeply into one individual subject. In some ways perhaps that is the ideal EDA for this dataset, as it provides overviews of many subjects, which may then be used for more specific and exhaustive analyses at a later date. 
 
+I was most satisfied with the location map plots, and the heat maps - they showed interesting patterns, and are clear and easy to understand for a general audience. 
+
+Looking towards future analyses, I would perform a similar high-level EDA of the two tables I didn't look into here - the *review* and *tip* data. These are primarily text-based, and would be more suited to a NLP analysis. Combined with the EDA already performed, this could highlight some really interesting facets of the data. Alternatively, I would select just one of the tables and perform more in-depth analysis - this would reduce the slightly scatter-shot approach that I ended taking in this analysis.
 
 
